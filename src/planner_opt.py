@@ -37,18 +37,16 @@ def _normalize_col(c: str) -> str:
     return c2
 
 def preprocess_forecast(df: pd.DataFrame) -> pd.DataFrame:
-    """pred.csv가 시간별 행일 수도, 제품별 스냅샷일 수도 있으므로 안전 스냅샷 처리."""
     df = df.copy()
     df.columns = [_normalize_col(c) for c in df.columns]
 
     if "Product_Number" not in df.columns:
         raise KeyError(f"'Product_Number' 컬럼이 없습니다. 현재 컬럼: {list(df.columns)}")
 
-    # DateTime이 없으면 그대로 사용(이미 제품별 1행 스냅샷 가정)
     if "DateTime" not in df.columns:
         return df
 
-    # DateTime 파싱 및 최신 스냅샷 선택
+    # DateTime 파싱 및 최신 날짜 선택
     df["DateTime"] = pd.to_datetime(df["DateTime"], errors="coerce")
     valid = df.dropna(subset=["DateTime"])
     if valid.empty:
@@ -85,13 +83,12 @@ def detect_horizons(df: pd.DataFrame) -> List[str]:
             candidates.append(c)
         elif ("T" in cc and "예상" in cc) or ("T" in cc and "수주" in cc):
             candidates.append(c)
-    # 정렬: T, T+1, T+2 ...
+
     def _key(x: str) -> int:
         s = _normalize_col(x)
         if s == "T": return 0
         m = re.match(r"T\+(\d+)", s)
-        if m: return int(m.group(1))
-        # 한국어 케이스: "T+1일 예상 수주량" 등
+        if m: return int(m.group(1))       
         m2 = re.search(r"T\+(\d+)", s)
         return int(m2.group(1)) if m2 else 10_000
     candidates = sorted(set(candidates), key=_key)
@@ -109,7 +106,7 @@ def _make_2d_bool(model: cp_model.CpModel, P: int, D: int, name: str):
     return [[model.NewBoolVar(f"{name}_{i}_{d}") for d in range(D)] for i in range(P)]
 
 # -----------------------------
-# (C) 최적화 코어
+# (C) 최적화
 # -----------------------------
 def optimize_plan(
     forecast_by_product: pd.DataFrame,
@@ -122,22 +119,20 @@ def optimize_plan(
     int_production: bool = True,   # CP-SAT은 정수, 인터페이스 일치 목적
     scale: int = 10,
     initial_inventory_map: Optional[Dict[str, float]] = None,
-    # 정책 주입(옵션)
     min_lot_map: Optional[Dict[int, float]] = None,
     safety_stock_map: Optional[Dict[int, float]] = None,
     weight_map: Optional[Dict[int, float]] = None,
 ) -> pd.DataFrame:
     
     def _diag_horizons(df: pd.DataFrame, horizons: list, prod_col: str, tag: str="[DIAG]"):
-        # 1) 컬럼 정규화 흔적 확인
+        # 1) 컬럼 정규화 확인
         print(f"{tag} columns(sample 10):", list(df.columns)[:10])
 
-        # 2) 누락/추가된 horizon 탐지
+        # 2) 누락/추가 horizon 확인
         miss = [h for h in horizons if h not in df.columns]
         extra = [c for c in df.columns if c not in ([prod_col] + horizons)]
         print(f"{tag} missing_horizons:", miss)
         if miss:
-            # 어떤 유니코드/공백 문제인지 가까운 후보를 보여줌
             import difflib
             for h in miss:
                 near = difflib.get_close_matches(h, [str(c) for c in df.columns], n=3, cutoff=0.6)
@@ -148,8 +143,6 @@ def optimize_plan(
         num = sub.select_dtypes(include="number").columns.tolist()
         print(f"{tag} numeric_cols in horizons:", [c for c in horizons if c in num])
         print(f"{tag} NaN ratio per horizon:", sub[horizons].isna().mean().round(4).to_dict())
-
-        # 4) 첫 몇 행 프린트
         print(f"{tag} head:")
         print(sub.head(3))
     
@@ -240,7 +233,6 @@ def optimize_plan(
 
     model.Minimize(sum(terms))
 
-    # ----- 풀기 -----
     solver = cp_model.CpSolver()
     solver.parameters.relative_gap_limit = 0.02
     solver.parameters.max_time_in_seconds = 300.0
@@ -254,7 +246,7 @@ def optimize_plan(
 
     # ----- 결과 복원 -----
     disp_horizons = _sort_horizons_kor(horizons)
-    idx_of = {h: i for i, h in enumerate(horizons)}  # solver 내부 인덱스 매핑
+    idx_of = {h: i for i, h in enumerate(horizons)} 
 
     rows = []
     for d_out, hcol in enumerate(disp_horizons):
@@ -305,7 +297,6 @@ def main():
                 data = json.load(f)
         else:
             data = json.loads(s)
-        # 키를 int로 정규화
         return {int(k): float(v) for k, v in data.items()}
 
     pred = pd.read_csv(args.in_csv)
