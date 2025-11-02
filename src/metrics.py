@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 Metrics utilities for SCM pipeline:
-- Forecast metrics: MAE, RMSE, WAPE, MAPE, sMAPE, Bias (ME/MPE)
+- Forecast metrics: MAE, RMSE, WAPE, sMAPE, Bias (ME/MPE)
 - Planning  metrics: FillRate, BacklogRate, Utilization, Smoothness, InventoryTurnover
 - Optional cluster-level metrics when feat_df (Product_Number, Cluster) provided
 """
@@ -42,7 +42,7 @@ def _error_metrics(yhat: np.ndarray, y: np.ndarray) -> Dict[str, float]:
     mae = float(abs_e.mean())
     rmse = float(np.sqrt(sq_e.mean()))
     wape = float(abs_e.sum() / (np.abs(y).sum() + _EPS))
-    mape = float((abs_e / den).mean())
+    # MAPE intentionally removed (unstable near zero)
     smape = float((2 * abs_e / (np.abs(yhat) + np.abs(y) + _EPS)).mean())
     me = float(err.mean())
     mpe = float((err / den).mean())
@@ -50,7 +50,6 @@ def _error_metrics(yhat: np.ndarray, y: np.ndarray) -> Dict[str, float]:
         "MAE": mae,
         "RMSE": rmse,
         "WAPE": wape,
-        "MAPE": mape,
         "sMAPE": smape,
         "Bias_ME": me,
         "Bias_MPE": mpe,

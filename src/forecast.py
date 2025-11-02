@@ -52,7 +52,6 @@ python src/forecast.py \
   --seed 2025 \
   --best_params_path ./configs/best_params.json \
   --deterministic
-
 """
 
 from typing import List, Tuple, Dict
@@ -63,7 +62,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.pipeline import Pipeline
 from sklearn.linear_model import TweedieRegressor
 from sklearn.multioutput import MultiOutputRegressor
-from sklearn.metrics import mean_absolute_error, r2_score, roc_auc_score, average_precision_score, precision_recall_fscore_support
+from sklearn.metrics import mean_absolute_error, r2_score, roc_auc_score, precision_recall_fscore_support
 import json
 from pathlib import Path
 
@@ -74,10 +73,10 @@ def load_best_params(path: str | Path) -> Dict | None:
         if p.exists():
             with open(p, "r", encoding="utf-8") as f:
                 params = json.load(f)
-            print(f"📥 Loaded best params from: {p}")
+            print(f"Loaded best params from: {p}")
             return params
     except Exception as e:
-        print(f"⚠️ Failed to load best params ({path}): {e}")
+        print(f"Failed to load best params ({path}): {e}")
     return None
 
 def save_best_params(path: str | Path, params: Dict) -> None:
@@ -86,9 +85,9 @@ def save_best_params(path: str | Path, params: Dict) -> None:
         p.parent.mkdir(parents=True, exist_ok=True)
         with open(p, "w", encoding="utf-8") as f:
             json.dump(params, f, ensure_ascii=False, indent=2)
-        print(f"💾 Saved best params to: {p}")
+        print(f"Saved best params to: {p}")
     except Exception as e:
-        print(f"⚠️ Failed to save best params ({path}): {e}")
+        print(f"Failed to save best params ({path}): {e}")
 
 # ---- Optional deps
 try:
@@ -143,8 +142,8 @@ def build_xy(df: pd.DataFrame, prod_col: str, target_cols: List[str], log_target
     cat_cols = [prod_col]
     if len(num_cols)==0: raise RuntimeError("사용 가능한 수치형 피처가 없습니다. features.py를 확인하세요.")
     X = df[num_cols + cat_cols].copy()
-    print(f"🧩 Features used: {len(num_cols)} numeric + {len(cat_cols)} categorical")
-    if excluded: print(f"🚫 Excluded (leakage/targets): {len(excluded)} cols")
+    print(f"Features used: {len(num_cols)} numeric + {len(cat_cols)} categorical")
+    if excluded: print(f"Excluded (leakage/targets): {len(excluded)} cols")
     return X, y, num_cols, cat_cols, excluded
 
 # =============== Metrics ===============
@@ -154,7 +153,6 @@ def binary_metrics(y_true: np.ndarray, y_score: np.ndarray) -> dict:
         try: return f(*args, **kwargs)
         except Exception: return np.nan
     auc = _safe(roc_auc_score, y_true_bin, y_score)
-    ap  = _safe(average_precision_score, y_true_bin, y_score)
     uniq = np.unique(y_score)
     if len(uniq) > 200:
         uniq = np.unique(np.quantile(y_score, np.linspace(0,1,200)))
@@ -163,14 +161,18 @@ def binary_metrics(y_true: np.ndarray, y_score: np.ndarray) -> dict:
         y_pred = (y_score >= thr).astype(int)
         p,r,f,_ = precision_recall_fscore_support(y_true_bin,y_pred,average="binary",zero_division=0)
         if f>best["f1"]: best={"f1":float(f),"p":float(p),"r":float(r),"thr":float(thr)}
-    return {"AUC":float(auc),"AP":float(ap),"F1":best["f1"],"Precision":best["p"],"Recall":best["r"],"BestThreshold":best["thr"]}
+    return {"AUC":float(auc),"F1":best["f1"],"Precision":best["p"],"Recall":best["r"],"BestThreshold":best["thr"]}
 
 def smape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1e-8) -> float:
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
     denom = np.abs(y_true) + np.abs(y_pred) + eps
     return float(np.mean(2.0 * np.abs(y_pred - y_true) / denom))
 
-def mape(y_true: np.ndarray, y_pred: np.ndarray, eps: float = 1e-8) -> float:
-    return float(np.mean(np.abs(y_pred - y_true) / (np.abs(y_true) + eps)))
+def rmse(y_true: np.ndarray, y_pred: np.ndarray) -> float:
+    y_true = np.asarray(y_true, dtype=float)
+    y_pred = np.asarray(y_pred, dtype=float)
+    return float(np.sqrt(np.mean((y_pred - y_true) ** 2)))
 
 # =============== Splits ===============
 def time_split(df_raw: pd.DataFrame, X: pd.DataFrame, y: pd.DataFrame, dt_col: str, val_ratio: float):
@@ -230,9 +232,9 @@ def train_validate(df_raw, X, y, model, split="time", val_size=0.2, seed=2025, d
         pt = pred[:, i]
         rows[t] = {
             "MAE": mean_absolute_error(yt, pt),
+            "RMSE": rmse(yt, pt),          # ← 추가
             "R2":  r2_score(yt, pt),
             "SMAPE": smape(yt, pt),
-            "MAPE": mape(yt, pt),
             **binary_metrics(yt, pt)
         }
     return model, pd.DataFrame(rows).T
@@ -263,7 +265,7 @@ def average_mae(metrics_df, target_cols, emphasize=None):
 
 def tune_params(args, df, X, y, num_cols, cat_cols, target_cols):
     if optuna is None:
-        print("⚠️ Optuna 미설치: 튜닝을 건너뜁니다.")
+        print("Optuna 미설치: 튜닝을 건너뜁니다.")
         return None
     def objective(trial):
         params = dict(
@@ -287,7 +289,7 @@ def tune_params(args, df, X, y, num_cols, cat_cols, target_cols):
         return average_mae(mdf, target_cols)
     study = optuna.create_study(direction="minimize")
     study.optimize(objective, n_trials=args.trials, show_progress_bar=False)
-    print("🏆 Best params:", study.best_params)
+    print("Best params:", study.best_params)
     return study.best_params
 
 # =============== CLI ===============
@@ -352,22 +354,22 @@ def main():
     model, metrics_df = train_validate(df, X, y, model, split=args.split, val_size=args.val_size,
                                        seed=args.seed, dt_col=args.dt_col, prod_col=args.prod_col,
                                        log_target=args.log_target)
-    print("📊 Validation metrics")
+    print("Validation metrics")
     print(metrics_df.to_string())
 
     if args.metrics_out:
         Path(args.metrics_out).parent.mkdir(parents=True, exist_ok=True)
         metrics_df.to_csv(args.metrics_out, encoding="utf-8-sig")
-        print(f"💾 저장: {args.metrics_out}")
+        print(f"저장: {args.metrics_out}")
 
     pred_all = predict_all(model, X, df, args.prod_col, args.dt_col, target_cols)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     pred_all.to_csv(args.out, index=False, encoding="utf-8-sig")
-    print(f"💾 예측 저장: {args.out}")
+    print(f"예측 저장: {args.out}")
 
     prod_agg = aggregate_by_product(pred_all, args.prod_col)
     prod_agg.to_csv(args.out.replace(".csv","_by_product.csv"), index=False, encoding="utf-8-sig")
-    print(f"💾 제품별 평균 저장: {args.out.replace('.csv','_by_product.csv')}")
+    print(f"제품별 평균 저장: {args.out.replace('.csv','_by_product.csv')}")
 
 if __name__ == "__main__":
     main()
