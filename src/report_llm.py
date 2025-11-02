@@ -1,36 +1,4 @@
-# # src/report_llm.py
-
-# [FILES]
-# [PRODUCTION_PLAN_CSV]
-# {plan_txt}
-
-# [FORECAST_BY_PRODUCT_CSV]
-# {forecast_txt}
-
-# [FORECAST_METRICS_CSV]
-# {metrics_txt}
-
-# [TASK]
-# 1) 요약(기간, CAPA, 총 수요/생산/백로그)
-# 2) 제품 Top5: 증산 필요 / 과다생산
-# 3) 예측성능: Horizon별 MAE/R2 요약
-# 4) 액션아이템: 3~5개 (CAPA 재배분, 로트/안전재고 조정 등)
-# 5) 리스크/가정: 데이터 품질/제약 가정 간단 표기
-
-"""
-
-CLI - 단일 플랜
-python -m src.report_llm \
-  --plan ./outputs/outputs/production_plan.csv \
-  --forecast ./outputs/outputs/pred_final.csv \
-  --metrics ./outputs/outputs/metrics_final.csv \
-  --feat ./outputs/outputs/feat.csv \
-  --model gpt-4o-mini \
-  --out_md ./reports/weekly_report.md \
-  --out_json ./reports/weekly_report.json \
-  --out_verify ./reports/weekly_report.verify.txt
-"""
-
+# src/report_llm.py
 
 import os
 import json
@@ -58,7 +26,7 @@ def _pick(cols_map: Dict[str, str], cands: List[str]) -> Optional[str]:
     컬럼 선택 우선순위:
     1) 대소문자 무시 정확 일치
     2) 단어 경계(\b) 일치
-    3) 부분문자열 일치 (단, product_number 오인방지)
+    3) 부분문자열 일치 (product_number 오인방지)
     """
     keys = list(cols_map.keys())
     lcands = [c.lower() for c in cands]
@@ -125,7 +93,6 @@ def _topn(series: pd.Series, n: int = 5, largest=True) -> List[Tuple[str, float]
     return [(str(idx), float(val)) for idx, val in ser.items()]
 
 def _pick(cols_map: Dict[str, str], cands: List[str]) -> Optional[str]:
-    # 부분일치(대소문자 무시)
     for k in cols_map:
         if any(name.lower() in k for name in cands):
             return cols_map[k]
@@ -267,7 +234,7 @@ def summarize_by_product(plan_csv: str, product_col_candidates=("product_number"
     }
 
 # =========================================================
-# 1) Plan 요약 + (신규) 다중 시나리오 KPI / Pareto
+# 1) Plan 요약                            
 # =========================================================
 def _summarize_single_plan(plan_csv: str) -> Dict:
     if not _exists(plan_csv):
@@ -276,7 +243,6 @@ def _summarize_single_plan(plan_csv: str) -> Dict:
     df = pd.read_csv(plan_csv)
     cols = {c.lower(): c for c in df.columns}
 
-    # 1) 먼저 컬럼 매핑부터
     col_prod = _pick(cols, ["product_number", "product", "제품"])
     col_date = _pick(cols, ["date", "날짜", "horizon", "day", "day_idx"])
     col_prod_qty = _pick(cols, ["생산", "production", "produce"])
@@ -289,7 +255,6 @@ def _summarize_single_plan(plan_csv: str) -> Dict:
           "/ qty:", col_prod_qty, "/ inv:", col_inv, "/ back:", col_backlog, "/ capa:", col_capa)
 
     if col_prod_qty == col_prod:
-        # 생산량 후보를 더 좁혀서 재탐색
         col_prod_qty = _pick(cols, ["produce", "production", "생산"])  # 이미 위에 있지만 재확인
         if col_prod_qty == col_prod or col_prod_qty is None:
             return {"missing": False, "schema_error": True, "columns": list(df.columns)}
@@ -298,11 +263,9 @@ def _summarize_single_plan(plan_csv: str) -> Dict:
     if any(x is None for x in required):
         return {"missing": False, "schema_error": True, "columns": list(df.columns)}
 
-    # 2) 안전 캐스팅(제품 ID는 문자열로)
     if col_prod in df.columns:
         df[col_prod] = df[col_prod].astype(str)
 
-    # 3) 숫자형 보정
     for c in [col_prod_qty, col_inv, col_backlog, col_capa]:
         if c and not pd.api.types.is_numeric_dtype(df[c]):
             df[c] = df[c].apply(_safe_float)
@@ -319,7 +282,6 @@ def _summarize_single_plan(plan_csv: str) -> Dict:
     total_backlog = float(df[col_backlog].sum()) if col_backlog else 0.0
     total_capa = float(df[col_capa].sum()) if col_capa else 0.0
 
-    # === [PATCH] totals 계산 이후: 평균 일일 CAPA ===
     n_days = None
     if col_date:
         n_days = df[col_date].nunique()
@@ -335,7 +297,7 @@ def _summarize_single_plan(plan_csv: str) -> Dict:
     else:
         prod_variability = None
 
-    # 평균 가동률(= 총생산/총CAPA), 목표(0.9)에 대한 편차
+    # 평균 가동률(= 총생산/총CAPA)
     avg_utilization = float(total_prod / total_capa) if total_capa > 0 else None
     util_target = 0.9
     util_deviation = float(abs(avg_utilization - util_target)) if avg_utilization is not None else None
@@ -402,7 +364,6 @@ def summarize_cluster_kpi(plan_csv: str, feat_csv: str) -> dict:
     plan = pd.read_csv(plan_csv)
     feat = pd.read_csv(feat_csv)
 
-    # 컬럼 클린
     def _dedup(df):
         if df.columns.duplicated().any():
             df = df.loc[:, ~df.columns.duplicated()].copy()
@@ -410,7 +371,6 @@ def summarize_cluster_kpi(plan_csv: str, feat_csv: str) -> dict:
         return df
     plan = _dedup(plan); feat = _dedup(feat)
 
-    # 키 매칭(느슨→엄격): Product_Number, product_number, product, 제품
     def _pick_key(df):
         lc = {c.lower(): c for c in df.columns}
         for k in ["product_number", "product", "제품"]:
@@ -426,7 +386,6 @@ def summarize_cluster_kpi(plan_csv: str, feat_csv: str) -> dict:
         return {"missing": False, "schema_error": True, "reason": "key not found",
                 "plan_cols": list(plan.columns), "feat_cols": list(feat.columns)}
 
-    # cluster 컬럼 이름 점검
     cl_col = None
     for c in feat.columns:
         if c.lower() == "cluster":
@@ -435,7 +394,6 @@ def summarize_cluster_kpi(plan_csv: str, feat_csv: str) -> dict:
         return {"missing": False, "schema_error": True, "reason": "cluster col not found",
                 "feat_cols": list(feat.columns)}
 
-    # 키 타입 통일(문자)
     plan[key_plan] = plan[key_plan].astype(str)
     feat[key_feat] = feat[key_feat].astype(str)
 
@@ -527,7 +485,7 @@ def summarize_plans(plans: List[str], names: Optional[List[str]] = None) -> Dict
     return {"scenarios": per}
 
 # =========================================================
-# 2) Metrics / Forecast 요약 (기존)
+# 2) Metrics / Forecast 요약
 # =========================================================
 def summarize_metrics(metrics_csv: str) -> Dict:
     if not _exists(metrics_csv):
@@ -807,7 +765,7 @@ def _render_canonical_md(facts: dict) -> str:
         md.append("  - (데이터 없음)")
     md.append("")
 
-    # 예측 메트릭 (있을 때만)
+    # 예측 메트릭 
     ms = facts.get("metrics_summary") or {}
     rows = []
     for r in (ms.get("by_horizon") or []):
@@ -818,7 +776,7 @@ def _render_canonical_md(facts: dict) -> str:
             md.append(f"  - {h} MAE: { _fmt(mae, 4) }, R2: { _fmt(r2, 4) }")
         md.append("")
 
-    # 시나리오 비교 (있을 때만)
+    # 시나리오 비교 
     scs = facts.get("plan_scenarios", {}).get("scenarios", [])
     if scs:
         md.append("- **시나리오 비교**")
@@ -898,7 +856,7 @@ def _enforce_facts_on_json(js: dict, facts: dict) -> dict:
         for d in over
     ]
 
-    # 시나리오 비교(있는 경우): Facts 그대로 사용
+    # 시나리오 비교: Facts 그대로 사용
     sc = facts.get("plan_scenarios", {}).get("scenarios", [])
     table = []
     for it in sc:
@@ -944,11 +902,11 @@ def generate_rule_based_actions(facts: dict) -> List[str]:
                 actions.append("상위 소수 품목에 대한 집중 생산 전략 수립")
 
     # --- 3. 생산 변동성 ---
-    if prod_var is not None and prod_var > 500:  # θ=500 예시값
+    if prod_var is not None and prod_var > 500:  # θ=500
         actions.append("일별 생산 변동성을 완화하기 위한 생산 스무딩/캠페인 조정")
 
     # --- 4. 과잉 재고 ---
-    if total_inv > 10000:  # 임계치 예시 (데이터 규모에 따라 조정)
+    if total_inv > 10000:  # 임계치: 데이터 규모에 따라 조정
         actions.append("과잉 재고 감축 및 프로모션 전략 검토")
 
     # --- 5. 기본 fallback ---
@@ -1021,8 +979,8 @@ def build_report_with_llm(
     print("[DEBUG] cluster_summary.flags:", {k: cluster_summary.get(k) for k in ["missing","schema_error","reason"]})
 
     facts = {
-        "plan_scenarios": plans_summary,     # 다중 시나리오 KPI + Pareto
-        "plan_summary_rep": rep_sum,         # 대표(첫 번째) 요약 (단일 입력과 호환)
+        "plan_scenarios": plans_summary,     
+        "plan_summary_rep": rep_sum,         
         "metrics_summary": metrics_sum,
         "forecast_summary": forecast_sum,
         "product_summary": product_summary,
@@ -1033,7 +991,6 @@ def build_report_with_llm(
 
     samples = []
     if plans:
-        # 시나리오별 샘플 헤드
         for nm, p in zip(scenario_names or [f"scenario_{i+1}" for i in range(len(plans))], plans):
             samples.append(f"[PRODUCTION_PLAN: {nm}]\n{_read_clip_csv(p, max_rows=max_head_rows, max_chars=max_chars)}")
     if forecast_csv:
@@ -1085,7 +1042,6 @@ def build_report_with_llm(
             js2, md2 = _split_json_markdown(raw2)
             raw, js, md = raw2, js2, md2
             regen = True
-            # 최종 1회 재검증(보고만)
             verification = verify_report(js if js else {}, facts, cfg)
 
     return {"json": js, "markdown": md, "raw": raw, "verify": verification, "regen": regen}
@@ -1102,9 +1058,8 @@ def _ensure_parent_dir(path: str):
 # =========================================================
 def main():
     p = argparse.ArgumentParser(description="Weekly report generator (LLM-augmented, with Verifier & Scenarios)")
-    # 단일 입력(하위호환)
+
     p.add_argument("--plan", help="production_plan.csv 경로 (단일)")
-    # 복수 시나리오 입력
     p.add_argument("--plans", help="쉼표(,)로 구분된 production_plan.csv 경로 목록")
     p.add_argument("--scenario_names", help="쉼표(,)로 구분된 시나리오 이름 목록 (plans와 동일 길이)")
     p.add_argument("--forecast", help="forecast_by_product.csv 경로")
