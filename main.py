@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 ''' CLI
-python -m main_test \
+python -m main \
   --data ./data/data.csv \
   --out_dir ./outputs \
   --prod_col Product_Number \
@@ -180,12 +180,14 @@ def run_pipeline(
     # 문자열 포매팅(.2f)로 생산된 경우 수치형으로도 하나 더 저장하고 싶으면 여기서 캐스팅
     # (리포트/LNS용은 문자열도 괜찮지만, KPI 집계는 숫자가 편함)
     for c in ["demand", "produce", "end_inventory", "backlog"]:
-        if c in plan_df.columns and plan_df[c].dtype == object:
-            try:
-                plan_df[c] = plan_df[c].astype(float)
-            except Exception:
-                pass
+        if c in plan_df.columns:
+            plan_df[c] = pd.to_numeric(plan_df[c], errors="coerce")
+            
+    plan_df[prod_col] = plan_df[prod_col].astype(str).str.replace(r"\.0$", "", regex=True)
 
+    counts = plan_df.groupby("day_idx")[prod_col].transform("count")
+    plan_df["capa"] = daily_capacity / counts
+    plan_df["day"] = plan_df["day_idx"]
     plan_df.to_csv(plan_csv, index=False)
     print(f"  -> {plan_csv} (rows={len(plan_df)})")
 
