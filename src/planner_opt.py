@@ -121,6 +121,7 @@ def optimize_plan(
     initial_inventory: float = 0.0,
     int_production: bool = True,   # CP-SAT은 정수, 인터페이스 일치 목적
     scale: int = 10,
+    initial_inventory_map: Optional[Dict[str, float]] = None,
     # 정책 주입(옵션)
     min_lot_map: Optional[Dict[int, float]] = None,
     safety_stock_map: Optional[Dict[int, float]] = None,
@@ -185,10 +186,14 @@ def optimize_plan(
         s_stock = int(safety_stock_map.get(cid, 0) * scale)
 
         for d in range(D):
-            prev_inv = inv[i][d-1] if d > 0 else init_inv_i
+            if d == 0:
+                init_inv_i = int(round(initial_inventory_map.get(p, initial_inventory) * scale)) \
+                             if initial_inventory_map else int(round(initial_inventory * scale))
+                prev_inv = init_inv_i
+            else:
+                prev_inv = inv[i][d-1]
             # 재고 흐름 (완화형): prev_inv + produce - demand == inv - backlog
             model.Add(prev_inv + produce[i][d] - demand_i[i, d] == inv[i][d] - backlog[i][d])
-
             # 재고/백로그 동시양수 방지 (논리)
             inv_pos  = model.NewBoolVar(f"inv_pos_{i}_{d}")
             back_pos = model.NewBoolVar(f"back_pos_{i}_{d}")
@@ -264,11 +269,10 @@ def optimize_plan(
                 "day_idx": d_out,            # 0..4
                 "horizon": hcol,             # 'T일 예상 수주량' ~ 'T+4일 예상 수주량'
                 prod_col: p,
-                # 소수점 둘째자리 고정(.2f)
-                "demand":        f"{demand_val:.2f}",
-                "produce":       f"{produce_val:.2f}",
-                "end_inventory": f"{inv_val:.2f}",
-                "backlog":       f"{backlog_val:.2f}",
+                "demand":        demand_val,   
+                "produce":       produce_val,  
+                "end_inventory": inv_val,      
+                "backlog":       backlog_val,  
             })
 
     return pd.DataFrame(rows)
@@ -288,10 +292,10 @@ def main():
     ap.add_argument("--initial_inventory", type=float, default=0.0)
     ap.add_argument("--scale", type=int, default=10)
     ap.add_argument("--int_production", action="store_true")
-    # 정책 맵 주입(JSON 문자열 또는 파일 경로)
     ap.add_argument("--min_lot_map", type=str, default=None, help='JSON 또는 @file.json')
     ap.add_argument("--safety_stock_map", type=str, default=None)
     ap.add_argument("--weight_map", type=str, default=None)
+    ap.add_argument("--initial_inventory_map", type=str, default=None)
     args = ap.parse_args()
 
     def _load_map(s: Optional[str]) -> Optional[Dict[int, float]]:
@@ -310,6 +314,7 @@ def main():
 
     forecast_df = preprocess_forecast(pred)
     horizons = args.horizons or detect_horizons(forecast_df)
+    inv_map = _load_map(args.initial_inventory_map) or {}
 
     plan_df = optimize_plan(
         forecast_by_product=forecast_df,
@@ -324,8 +329,9 @@ def main():
         min_lot_map=_load_map(args.min_lot_map),
         safety_stock_map=_load_map(args.safety_stock_map),
         weight_map=_load_map(args.weight_map),
+        initial_inventory_map=inv_map,
     )
-    plan_df.to_csv(args.out_csv, index=False)
+    plan_df.to_csv(args.out_csv, index=False, float_format="%.2f")
     print(f"[OK] Saved plan: {args.out_csv} (rows={len(plan_df)})")
 
 if __name__ == "__main__":
